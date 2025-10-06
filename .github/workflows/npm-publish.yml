@@ -1,0 +1,113 @@
+# --- GitHub Actions Workflow: auto-bump version & publish to npm ---
+
+name: Bump & Publish to npm  # Display name in the Actions tab
+
+on:
+  push:
+    branches: [ "main" ]      # Run automatically on pushes to main
+  workflow_dispatch:          # Allow manual runs from the Actions tab
+    inputs:
+      bump:                   # Optional manual semver override
+        description: "Semver bump (patch|minor|major)"
+        required: false
+        default: "patch"      # Default when manually triggered
+
+permissions:
+  contents: write             # Needed so the workflow can commit + push tags
+
+concurrency:
+  group: release-${{ github.ref }}  # Prevent parallel releases per branch/tag
+  cancel-in-progress: true           # Cancel older in-flight runs for same ref
+
+jobs:
+  release:
+    runs-on: ubuntu-latest     # Runner OS
+
+    steps:
+      - name: Checkout (with full history for tagging)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0       # Full history so `npm version` can create tags
+
+      - name: Use Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20                     # Your Node version for build/publish
+          registry-url: https://registry.npmjs.org  # Make npm commands target npmjs
+          scope: "@klazapp"                    # Default scope for auth/caching
+          cache: "npm"                         # Speed up installs by caching ~/.npm
+
+      - name: Force npmjs registry (override any GH .npmrc)
+        run: |
+          # Some repos or user profiles point scoped packages at GitHub Packages.
+          # This hard-pins the scope + default registry to npmjs for this run.
+          printf "registry=https://registry.npmjs.org/\n@klazapp:registry=https://registry.npmjs.org/\n" > .npmrc
+
+      - name: Install
+        run: npm ci                # Clean install from package-lock for reproducibility
+
+      # Decide the bump type safely for both push and manual dispatch
+      - name: Resolve bump type
+        id: bump
+        run: |
+          # On manual runs, use the provided input; on push events, default to "patch".
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.bump }}" ]; then
+            echo "value=${{ github.event.inputs.bump }}" >> $GITHUB_OUTPUT
+          else
+            echo "value=patch" >> $GITHUB_OUTPUT
+          fi
+
+      # Avoid infinite loop when this workflow commits the release
+      - name: Should skip? (skip if last commit is our release commit)
+        id: skipcheck
+        run: |
+          # If the last commit message is our release commit (with [skip ci]),
+          # don't bump/tag/push/publish again.
+          MSG="$(git log -1 --pretty=%B)"
+          if echo "$MSG" | grep -qiE '\[skip ci\]|chore\(release\)'; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Configure git
+        if: steps.skipcheck.outputs.skip == 'false'
+        run: |
+          # Identify as the GitHub Actions bot for the release commit + tag.
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Bump version
+        if: steps.skipcheck.outputs.skip == 'false'
+        run: |
+          # `npm version` updates package.json, creates a git tag, and commits.
+          # We include [skip ci] so the push won't re-trigger this workflow.
+          echo "Bumping version: ${{ steps.bump.outputs.value }}"
+          npm version "${{ steps.bump.outputs.value }}" -m "chore(release): %s [skip ci]"
+
+      - name: Push commit & tags
+        if: steps.skipcheck.outputs.skip == 'false'
+        run: |
+          # Push the version bump commit and the new tag to origin/main.
+          git push --follow-tags
+
+      # Optional: skip publish if this exact version already exists (prevents EPUBLISHCONFLICT)
+      - name: Skip if version already on npm
+        id: exists
+        run: |
+          # Query npm to see if the version we’re about to publish is already there.
+          PKG=$(node -p "require('./package.json').name")
+          VER=$(node -p "require('./package.json').version")
+          if npm view "$PKG@$VER" version >/dev/null 2>&1; then
+            echo "present=true" >> $GITHUB_OUTPUT
+          else
+            echo "present=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Publish to npm
+        if: steps.skipcheck.outputs.skip == 'false' && steps.exists.outputs.present == 'false'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}  # Add an npm "Automation" token in repo secrets
+        run: |
+          # Publish as a public, scoped package to npmjs.
+          npm publish --access public
