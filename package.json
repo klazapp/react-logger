@@ -1,6 +1,10 @@
 {
-  "name": "@klazapp-utils/logger",
+  "name": "@klazapp/typescript-logger",
   "version": "0.1.0",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "description": "Tiny namespaced logger + auto-proxy wrapper + decorator, with global toggles.",
   "type": "module",
   "main": "dist/index.cjs",
