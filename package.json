@@ -1,6 +1,6 @@
 {
   "name": "@klazapp/typescript-logger",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"
@@ -22,8 +22,16 @@
     "dev": "tsup --watch --dts",
     "clean": "rimraf dist"
   },
-  "files": ["dist"],
-  "keywords": ["logger", "proxy", "decorator", "debug", "typescript"],
+  "files": [
+    "dist"
+  ],
+  "keywords": [
+    "logger",
+    "proxy",
+    "decorator",
+    "debug",
+    "typescript"
+  ],
   "author": "Klaus",
   "license": "MIT",
   "devDependencies": {
